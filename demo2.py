@@ -25,7 +25,9 @@ PASSWORD_APP = "YOUR_APP_PASSWORD"
 
 def invia_email(destinatario, prezzo):
     try:
-        msg = MIMEText(f"Buongiorno,\n\nIl prezzo di oggi è {prezzo:.3f} €/L\n\nGrazie")
+        testo = st.session_state.msg_email.replace("{prezzo}", f"{prezzo:.3f}")
+
+        msg = MIMEText(testo)
         msg["Subject"] = "Prezzo carburante"
         msg["From"] = EMAIL_MITTENTE
         msg["To"] = destinatario
@@ -65,7 +67,6 @@ def load_data():
     if os.path.exists(FILE):
         df = pd.read_csv(FILE)
 
-        # FIX TIPI (IMPORTANTISSIMO)
         for col in ["Nome","PIVA","Telefono","Email"]:
             df[col] = df[col].astype(str)
 
@@ -86,7 +87,7 @@ def save_data(df):
     df.to_csv(FILE, index=False)
 
 # =========================
-# INIT
+# INIT SESSION
 # =========================
 if "clienti" not in st.session_state:
     st.session_state.clienti = load_data()
@@ -99,6 +100,13 @@ if "edit_id" not in st.session_state:
 
 if "prezzo_base" not in st.session_state:
     st.session_state.prezzo_base = 1.000
+
+# 💬 MESSAGGI PERSONALIZZATI
+if "msg_email" not in st.session_state:
+    st.session_state.msg_email = "Buongiorno,\n\nIl prezzo di oggi è {prezzo} €/L\n\nGrazie"
+
+if "msg_wa" not in st.session_state:
+    st.session_state.msg_wa = "Prezzo oggi {prezzo} €/L"
 
 df = st.session_state.clienti
 
@@ -133,9 +141,9 @@ def card(title, value):
     </div>
     """
 
-# =========================================================
-# 📊 DASHBOARD
-# =========================================================
+# =========================
+# DASHBOARD
+# =========================
 if st.session_state.page == "dashboard":
 
     st.markdown("## ⛽ Dashboard operativa")
@@ -149,8 +157,13 @@ if st.session_state.page == "dashboard":
 
     st.session_state.prezzo_base = prezzo_base
 
-    clienti_count = len(df)
+    # ✉️ EDIT MESSAGGI
+    st.markdown("### ✉️ Messaggi personalizzati")
 
+    st.text_area("Messaggio EMAIL", key="msg_email", height=120)
+    st.text_area("Messaggio WhatsApp", key="msg_wa", height=80)
+
+    clienti_count = len(df)
     media_margine = round(df["Margine"].mean(), 3) if not df.empty else 0
 
     prezzo_medio = (
@@ -176,7 +189,7 @@ if st.session_state.page == "dashboard":
     st.divider()
 
     # =========================
-    # 🚀 MASS EMAIL
+    # MASS EMAIL
     # =========================
     if st.button("📧 Invia email a tutti"):
 
@@ -200,7 +213,7 @@ if st.session_state.page == "dashboard":
         st.success(f"Email inviate: {count}")
 
     # =========================
-    # 👤 LISTA CLIENTI (FIX STABILE)
+    # LISTA CLIENTI
     # =========================
     st.markdown("### 👤 Clienti")
 
@@ -225,7 +238,7 @@ if st.session_state.page == "dashboard":
 
         with col1:
             tel = str(c["Telefono"]).replace("+", "").replace(" ", "")
-            msg = f"Prezzo oggi {format_euro(prezzo)} €/L"
+            msg = st.session_state.msg_wa.replace("{prezzo}", format_euro(prezzo))
             wa = f"https://wa.me/{tel}?text={msg.replace(' ', '%20')}"
 
             st.markdown(
@@ -235,6 +248,7 @@ if st.session_state.page == "dashboard":
 
         with col2:
             if c["Email"] and pd.notna(c["Email"]):
+
                 if st.button("📧 Email", key=f"mail_{c['ID']}"):
 
                     prezzo_send = calc_price(prezzo_base, c["Margine"], c["Trasporto"])
@@ -257,9 +271,9 @@ if st.session_state.page == "dashboard":
 
         st.divider()
 
-# =========================================================
-# 👤 CLIENTI PAGE
-# =========================================================
+# =========================
+# CLIENTI PAGE
+# =========================
 elif st.session_state.page == "clienti":
 
     st.markdown("## 👤 Clienti")
@@ -293,9 +307,9 @@ elif st.session_state.page == "clienti":
 
         st.divider()
 
-# =========================================================
-# ➕ CLIENTE
-# =========================================================
+# =========================
+# CLIENTE EDIT
+# =========================
 elif st.session_state.page == "cliente":
 
     st.markdown("## ➕ Cliente")
