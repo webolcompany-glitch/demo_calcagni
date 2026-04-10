@@ -64,8 +64,17 @@ def filtra_clienti(df, search):
 def load_data():
     if os.path.exists(FILE):
         df = pd.read_csv(FILE)
+
+        # FIX TIPI (IMPORTANTISSIMO)
+        for col in ["Nome","PIVA","Telefono","Email"]:
+            df[col] = df[col].astype(str)
+
+        for col in ["Margine","Trasporto"]:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+
         if "UltimoPrezzo" not in df.columns:
             df["UltimoPrezzo"] = None
+
         return df
 
     return pd.DataFrame(columns=[
@@ -132,7 +141,7 @@ if st.session_state.page == "dashboard":
     st.markdown("## ⛽ Dashboard operativa")
 
     prezzo_base = st.number_input(
-        "⛽ Prezzo base giornaliero",
+        "⛽ Prezzo base",
         value=float(st.session_state.prezzo_base),
         step=0.001,
         format="%.3f"
@@ -142,10 +151,10 @@ if st.session_state.page == "dashboard":
 
     clienti_count = len(df)
 
-    media_margine = round(df["Margine"].astype(float).mean(), 3) if not df.empty else 0
+    media_margine = round(df["Margine"].mean(), 3) if not df.empty else 0
 
     prezzo_medio = (
-        calc_price(prezzo_base, df["Margine"].astype(float).mean(), df["Trasporto"].astype(float).mean())
+        calc_price(prezzo_base, df["Margine"].mean(), df["Trasporto"].mean())
         if not df.empty else prezzo_base
     )
 
@@ -153,7 +162,7 @@ if st.session_state.page == "dashboard":
     c3, c4 = st.columns(2)
 
     with c1:
-        st.markdown(card("⛽ Prezzo base", format_euro(prezzo_base)), unsafe_allow_html=True)
+        st.markdown(card("⛽ Base", format_euro(prezzo_base)), unsafe_allow_html=True)
 
     with c2:
         st.markdown(card("👤 Clienti", clienti_count), unsafe_allow_html=True)
@@ -174,7 +183,6 @@ if st.session_state.page == "dashboard":
         count = 0
 
         for _, c in df.iterrows():
-
             if c["Email"] and pd.notna(c["Email"]):
 
                 prezzo = calc_price(prezzo_base, c["Margine"], c["Trasporto"])
@@ -189,10 +197,10 @@ if st.session_state.page == "dashboard":
                 count += 1
 
         save_data(st.session_state.clienti)
-        st.success(f"Inviate {count} email")
+        st.success(f"Email inviate: {count}")
 
     # =========================
-    # 👤 CLIENTI LISTA (FIX RIPRISTINATO)
+    # 👤 LISTA CLIENTI (FIX STABILE)
     # =========================
     st.markdown("### 👤 Clienti")
 
@@ -203,7 +211,8 @@ if st.session_state.page == "dashboard":
 
         prezzo = calc_price(prezzo_base, c["Margine"], c["Trasporto"])
 
-        ultimo_txt = "Nessun invio" if pd.isna(c["UltimoPrezzo"]) else format_euro(c["UltimoPrezzo"]) + " €/L"
+        ultimo = c["UltimoPrezzo"]
+        ultimo_txt = "Nessun invio" if pd.isna(ultimo) else format_euro(ultimo) + " €/L"
 
         st.markdown(f"""
         ### 👤 {c['Nome']}
@@ -256,7 +265,6 @@ elif st.session_state.page == "clienti":
     st.markdown("## 👤 Clienti")
 
     search = st.text_input("🔍 Cerca cliente")
-
     df_view = filtra_clienti(df, search)
 
     for _, c in df_view.iterrows():
@@ -318,10 +326,10 @@ elif st.session_state.page == "cliente":
         if editing:
             idx = st.session_state.clienti["ID"] == st.session_state.edit_id
 
-            st.session_state.clienti.loc[idx, "Nome"] = nome
-            st.session_state.clienti.loc[idx, "PIVA"] = piva
-            st.session_state.clienti.loc[idx, "Telefono"] = tel
-            st.session_state.clienti.loc[idx, "Email"] = email
+            st.session_state.clienti.loc[idx, "Nome"] = str(nome)
+            st.session_state.clienti.loc[idx, "PIVA"] = str(piva)
+            st.session_state.clienti.loc[idx, "Telefono"] = str(tel)
+            st.session_state.clienti.loc[idx, "Email"] = str(email)
             st.session_state.clienti.loc[idx, "Margine"] = margine
             st.session_state.clienti.loc[idx, "Trasporto"] = trasporto
 
