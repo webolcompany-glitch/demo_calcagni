@@ -40,34 +40,36 @@ def invia_email(destinatario, prezzo):
         st.error(f"Errore email: {e}")
 
 # =========================
-# 🔒 3 DECIMALI NO ROUND
+# 🔒 SAFE NUMBER
 # =========================
-def trim_3_decimals(x):
-    if x is None or pd.isna(x):
-        return None
-    return math.floor(float(x) * 1000) / 1000
+def safe_float(x):
+    try:
+        if pd.isna(x):
+            return 0.0
+        return float(x)
+    except:
+        return 0.0
 
-# =========================
-# 🇮🇹 FORMAT EURO
-# =========================
+def trim_3_decimals(x):
+    return math.floor(float(x) * 1000) / 1000 if x is not None else 0
+
 def format_euro(x):
-    if x is None or pd.isna(x):
-        return "0,000"
     return f"{trim_3_decimals(x):.3f}".replace(".", ",")
 
 # =========================
-# 💾 DATA
+# 💾 DATA (FIX IMPORTANTE)
 # =========================
 def load_data():
     if os.path.exists(FILE):
         df = pd.read_csv(FILE)
 
-        if "UltimoPrezzo" not in df.columns:
-            df["UltimoPrezzo"] = None
+        # 🔥 FIX ANTI-CRASH
+        for col in ["Margine", "Trasporto", "UltimoPrezzo"]:
+            if col not in df.columns:
+                df[col] = 0
 
-        # ✅ FIX TIPI (FONDAMENTALE)
-        df["Margine"] = pd.to_numeric(df["Margine"], errors="coerce")
-        df["Trasporto"] = pd.to_numeric(df["Trasporto"], errors="coerce")
+        df["Margine"] = pd.to_numeric(df["Margine"], errors="coerce").fillna(0)
+        df["Trasporto"] = pd.to_numeric(df["Trasporto"], errors="coerce").fillna(0)
         df["UltimoPrezzo"] = pd.to_numeric(df["UltimoPrezzo"], errors="coerce")
 
         return df
@@ -79,19 +81,6 @@ def load_data():
 
 def save_data(df):
     df.to_csv(FILE, index=False)
-
-# =========================
-# 🔍 SEARCH SAFE
-# =========================
-def filtra_clienti(df, search):
-    if not search:
-        return df
-
-    return df[
-        df["Nome"].astype(str).str.contains(search, case=False, na=False) |
-        df["PIVA"].astype(str).str.contains(search, case=False, na=False) |
-        df["Telefono"].astype(str).str.contains(search, case=False, na=False)
-    ]
 
 # =========================
 # INIT
@@ -129,17 +118,65 @@ with c3:
 
 st.divider()
 
-# =========================================================
+# =========================
+# 📊 DASHBOARD
+# =========================
+if st.session_state.page == "dashboard":
+
+    st.markdown("## ⛽ Dashboard operativa")
+
+    prezzo_base = st.number_input(
+        "⛽ Prezzo base giornaliero",
+        value=float(st.session_state.prezzo_base),
+        step=0.001,
+        format="%.3f"
+    )
+
+    st.session_state.prezzo_base = prezzo_base
+
+    clienti_count = len(df)
+
+    media_margine = df["Margine"].mean()
+    prezzo_medio = (df["Margine"] + df["Trasporto"] + prezzo_base).mean() if not df.empty else prezzo_base
+
+    st.metric("Clienti", clienti_count)
+    st.metric("Margine medio", format_euro(media_margine))
+    st.metric("Prezzo medio", format_euro(prezzo_medio))
+
+    st.divider()
+
+    st.markdown("## 👤 Clienti")
+
+    for _, c in df.iterrows():
+
+        prezzo = prezzo_base + c["Margine"] + c["Trasporto"]
+
+        st.write(f"**{c['Nome']}** → {format_euro(prezzo)} €/L")
+
+# =========================
+# 👤 CLIENTI
+# =========================
+elif st.session_state.page == "clienti":
+
+    st.markdown("## 👤 Clienti")
+
+    st.dataframe(df)
+
+# =========================
 # ➕ CLIENTE
-# =========================================================
-if st.session_state.page == "cliente":
+# =========================
+elif st.session_state.page == "cliente":
 
     st.markdown("## ➕ Cliente")
 
     editing = st.session_state.edit_id is not None
 
     if editing:
-        c = df[df["ID"] == st.session_state.edit_id].iloc[0]
+        c = df[df["ID"] == st.session_state.edit_id]
+        if c.empty:
+            st.error("Cliente non trovato")
+            st.stop()
+        c = c.iloc[0]
     else:
         c = {"Nome":"","PIVA":"","Telefono":"","Email":"","Margine":0.0,"Trasporto":0.0}
 
@@ -156,15 +193,12 @@ if st.session_state.page == "cliente":
         if editing:
             idx = st.session_state.clienti["ID"] == st.session_state.edit_id
 
-            # ✅ UPDATE SICURO (NO ERRORE)
             st.session_state.clienti.loc[idx, "Nome"] = nome
             st.session_state.clienti.loc[idx, "PIVA"] = piva
             st.session_state.clienti.loc[idx, "Telefono"] = tel
             st.session_state.clienti.loc[idx, "Email"] = email
             st.session_state.clienti.loc[idx, "Margine"] = float(margine)
             st.session_state.clienti.loc[idx, "Trasporto"] = float(trasporto)
-
-            st.session_state.edit_id = None
 
         else:
             new_id = 1 if df.empty else int(df["ID"].max()) + 1
@@ -186,13 +220,3 @@ if st.session_state.page == "cliente":
         st.success("Salvato")
         st.session_state.page = "clienti"
         st.rerun()
-
-# =========================================================
-# 👤 CLIENTI
-# =========================================================
-elif st.session_state.page == "clienti":
-
-    st.markdown("## 👤 Clienti attivi")
-
-    for _, c in df.iterrows():
-        st.write(c["Nome"])
