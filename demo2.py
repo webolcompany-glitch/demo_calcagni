@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import os
 import smtplib
-import math
+from decimal import Decimal, ROUND_DOWN
 from email.mime.text import MIMEText
 
 st.set_page_config(page_title="Fuel SaaS", layout="wide")
@@ -22,7 +22,7 @@ st.markdown(f"## 🏢 Azienda: {azienda.upper()}")
 # 📧 EMAIL
 # =========================
 EMAIL_MITTENTE = "webolcompany@gmail.com"
-PASSWORD_APP = "neqr ewtb bdkr lmca"
+PASSWORD_APP = "YOUR_APP_PASSWORD"
 
 def invia_email(destinatario, prezzo):
     try:
@@ -40,20 +40,17 @@ def invia_email(destinatario, prezzo):
         st.error(f"Errore email: {e}")
 
 # =========================
-# 🔒 3 DECIMALI NO ROUND
+# 🔒 DECIMALI SICURI (NO LOSS)
 # =========================
 def trim_3_decimals(x):
     if x is None or pd.isna(x):
         return None
-    return math.floor(float(x) * 1000) / 1000
+    return float(Decimal(str(x)).quantize(Decimal("0.001"), rounding=ROUND_DOWN))
 
-# =========================
-# 🇮🇹 FORMAT EURO
-# =========================
 def format_euro(x):
     if x is None or pd.isna(x):
         return "0,000"
-    return f"{trim_3_decimals(x):.3f}".replace(".", ",")
+    return f"{float(Decimal(str(x)).quantize(Decimal('0.001'), rounding=ROUND_DOWN)):.3f}".replace(".", ",")
 
 # =========================
 # 💾 DATA
@@ -171,12 +168,12 @@ if st.session_state.page == "dashboard":
         st.markdown(card("📊 Margine medio per litro", format_euro(media_margine)), unsafe_allow_html=True)
 
     with c4:
-        st.markdown(card("💰 Prezzo di vendita oggi (medio)", format_euro(prezzo_medio)), unsafe_allow_html=True)
+        st.markdown(card("💰 Prezzo medio di vendita", format_euro(prezzo_medio)), unsafe_allow_html=True)
 
     st.divider()
 
     # =========================
-    # 🚀 AZIONE MASSIVA EMAIL (SOPRA CLIENTI)
+    # 🚀 INVIO MASSIVO EMAIL
     # =========================
     st.markdown("### 🚀 Azioni rapide")
 
@@ -224,7 +221,7 @@ if st.session_state.page == "dashboard":
         st.markdown(f"""
         ### 👤 {c['Nome']}
         📄 P.IVA: {c['PIVA']}  
-        💰 **Prezzo di vendita oggi: {format_euro(prezzo)} €/L**  
+        💰 Prezzo di vendita oggi: {format_euro(prezzo)} €/L  
         📌 Ultimo prezzo inviato: **{ultimo_txt}**
         """)
 
