@@ -3,8 +3,64 @@ import pandas as pd
 import os
 import smtplib
 from email.mime.text import MIMEText
-from datetime import datetime
+from email.mime.multipart import MIMEMultipart
+from datetime import datetime, timedelta
+from supabase import create_client
 
+def pasqua(anno):
+    """Calcolo Pasqua (algoritmo di Gauss)"""
+    a = anno % 19
+    b = anno // 100
+    c = anno % 100
+    d = b // 4
+    e = b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19*a + b - d - g + 15) % 30
+    i = c // 4
+    k = c % 4
+    l = (32 + 2*e + 2*i - h - k) % 7
+    m = (a + 11*h + 22*l) // 451
+    mese = (h + l - 7*m + 114) // 31
+    giorno = ((h + l - 7*m + 114) % 31) + 1
+    return datetime(anno, mese, giorno)
+
+def festivi_italiani(anno):
+    pasqua_date = pasqua(anno)
+    pasquetta = pasqua_date + timedelta(days=1)
+
+    return set([
+        datetime(anno, 1, 1),   # Capodanno
+        datetime(anno, 1, 6),   # Epifania
+        datetime(anno, 4, 25),  # Liberazione
+        datetime(anno, 5, 1),   # Lavoro
+        datetime(anno, 6, 2),   # Repubblica
+        datetime(anno, 8, 15),  # Ferragosto
+        datetime(anno, 11, 1),  # Ognissanti
+        datetime(anno, 12, 8),  # Immacolata
+        datetime(anno, 12, 25), # Natale
+        datetime(anno, 12, 26), # Santo Stefano
+        pasqua_date,
+        pasquetta
+    ])
+
+def prossimo_giorno_lavorativo(data=None):
+    if data is None:
+        data = datetime.now()
+
+    giorno = data + timedelta(days=1)
+    festivi = festivi_italiani(giorno.year)
+
+    while giorno.weekday() >= 5 or giorno.replace(hour=0, minute=0, second=0, microsecond=0) in festivi:
+        giorno += timedelta(days=1)
+        festivi = festivi_italiani(giorno.year)
+
+    return giorno
+    
+supabase = create_client(
+    st.secrets["SUPABASE_URL"],
+    st.secrets["SUPABASE_KEY"]
+)
 st.set_page_config(page_title="Fuel SaaS", layout="wide")
 
 # =========================
@@ -21,24 +77,51 @@ st.markdown(f"## 🏢 Azienda: {azienda.upper()}")
 # =========================
 # 📧 EMAIL
 # =========================
-EMAIL_MITTENTE = "webolcompany@gmail.com"
-PASSWORD_APP = "neqr ewtb bdkr lmca"
+EMAIL_MITTENTE = st.secrets["EMAIL_MITTENTE"]
+PASSWORD_APP = st.secrets["PASSWORD_APP"]
 
-def invia_email(destinatario, prezzo):
+def invia_email(destinatari, prezzo, template, nome=""):
     try:
-        data = datetime.now().strftime("%d/%m/%Y")
+        data_invio = datetime.now()
+        data_scarico = prossimo_giorno_lavorativo()
 
-        msg = MIMEText(
-            f"Buongiorno,\n\nIl prezzo di oggi è {prezzo:.3f} €/L\n\nGrazie"
-        )
-        msg["Subject"] = f"OFFERTA CARBURANTE - {data}"
+        giorni = ["Lunedì","Martedì","Mercoledì","Giovedì","Venerdì","Sabato","Domenica"]
+        giorno_nome = giorni[data_scarico.weekday()]
+
+        data = f"{giorno_nome} {data_scarico.strftime('%d/%m/%Y')}"
+
+        testo = template \
+            .replace("{prezzo}", f"{prezzo:.3f}") \
+            .replace("{nome}", nome) \
+            .replace("{data}", data)
+
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = f"OFFERTA CARBURANTE - PREZZI VALIDI PER {data}"
         msg["From"] = EMAIL_MITTENTE
-        msg["To"] = destinatario
+
+        # 👉 lista email
+        lista_email = [e.strip() for e in destinatari.split(",") if e.strip()]
+
+        if not lista_email:
+            return
+
+        msg["To"] = lista_email[0]
+
+        if len(lista_email) > 1:
+            msg["Cc"] = ", ".join(lista_email[1:])
+
+        msg.attach(MIMEText(testo, "html", "utf-8"))
 
         server = smtplib.SMTP("smtp.gmail.com", 587)
         server.starttls()
         server.login(EMAIL_MITTENTE, PASSWORD_APP)
-        server.send_message(msg)
+
+        server.sendmail(
+            EMAIL_MITTENTE,
+            lista_email,
+            msg.as_string()
+        )
+
         server.quit()
 
     except Exception as e:
@@ -68,27 +151,45 @@ def filtra_clienti(df, search):
 # 💾 DATA
 # =========================
 def load_data():
-    if os.path.exists(FILE):
-        df = pd.read_csv(FILE)
+    res = supabase.table("clienti").select("*").execute()
+    data = res.data
 
-        for col in ["Nome","PIVA","Telefono","Email"]:
-            df[col] = df[col].astype(str)
+    if not data:
+        return pd.DataFrame(columns=[
+            "ID","Nome","PIVA","Telefono","Email",
+            "Margine","Trasporto","UltimoPrezzo"
+        ])
 
-        for col in ["Margine","Trasporto"]:
-            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+    df = pd.DataFrame(data)
 
-        if "UltimoPrezzo" not in df.columns:
-            df["UltimoPrezzo"] = None
+    df = df.rename(columns={
+        "id":"ID",
+        "nome":"Nome",
+        "piva":"PIVA",
+        "telefono":"Telefono",
+        "email":"Email",
+        "margine":"Margine",
+        "trasporto":"Trasporto",
+        "ultimo_prezzo":"UltimoPrezzo"
+    })
 
-        return df
-
-    return pd.DataFrame(columns=[
-        "ID","Nome","PIVA","Telefono","Email",
-        "Margine","Trasporto","UltimoPrezzo"
-    ])
+    return df
 
 def save_data(df):
-    df.to_csv(FILE, index=False)
+
+    records = df.rename(columns={
+        "ID":"id",
+        "Nome":"nome",
+        "PIVA":"piva",
+        "Telefono":"telefono",
+        "Email":"email",
+        "Margine":"margine",
+        "Trasporto":"trasporto",
+        "UltimoPrezzo":"ultimo_prezzo"
+    }).to_dict(orient="records")
+
+    if records:
+        supabase.table("clienti").upsert(records).execute()
 
 # =========================
 # INIT
@@ -105,6 +206,100 @@ if "edit_id" not in st.session_state:
 if "prezzo_base" not in st.session_state:
     st.session_state.prezzo_base = 1.000
 
+if "email_template" not in st.session_state:
+    st.session_state.email_template = """<div style="font-family: Serif, Arial, sans-serif; font-size:14px; line-height:1.5; color:#000000;">
+
+Gentile cliente,<br><br>
+
+con la presente le formuliamo la nostra migliore offerta sui prodotti utilizzati dalla Vostra azienda ''ipotizzando'' un presunto scarico per la giornata in oggetto.<br><br>
+
+<b>Gasolio per autotrazione = {prezzo}/litro + Iva</b><br><br>
+
+Per via delle attuali fluttuazioni di mercato i prezzi in elenco avranno una validità giornaliera.<br><br>
+
+Le consegne dei prodotti avverranno entro il giorno dopo alla data di effettuazione dell'ordine.<br><br>
+
+<b>ATTENZIONE!!!</b> GLI ORDINI DOVRANNO PERVENIRE ENTRO LE ORE 14:00 RISPONDENDO ALLA PRESENTE OPPURE CHIAMANDO AL NUMERO DI TELEFONO<br><br>
+
+Rag. Silvio Calcagni - 335/6145323 &nbsp;&nbsp;&nbsp; Luigi Calcagni - 3209364267
+<br>
+<br>
+<br>
+<!-- FIRMA -->
+<div style="font-family: Verdana, sans-serif; font-size:11px; line-height:1.4; color:#2F5496; margin-top:10px;">
+
+<p><b>Long Life Consulting</b></p>
+
+<p>
+Luigi Calcagni<br>
+<br>
+Corso Italia, 46 – 80011 Acerra (NA)
+</p>
+
+<p>
+Mob: 3209364267<br>
+<br>
+Info: info@longlifecons.com
+</p>
+<br>
+<br>
+<br>
+<p>
+Wholeses Fuels - Fuel Cards - Coupons<br>
+<br>
+<b>Agente di</b><br><br>
+
+<img src="https://longlifecons.com/wp-content/Prodotti/Tamoil.svg.png" width="90">
+</p>
+
+<p>
+Via Andrea Costa, 17 20131 Milano, ITALIA
+</p>
+
+<p>
+Tel: 800 11 33 30
+</p>
+
+</div>
+
+<br>
+
+<!-- DISCLAIMER -->
+<div style="font-family: Verdana, Arial, sans-serif; font-size:11px; color:#000000; line-height:1.4;">
+<i>
+La presente comunicazione, con le informazioni in essa contenute e ogni documento o file allegato, e' strettamente riservata e soggetta alle garanzie che legano i rapporti tra le parti interessate. E' rivolta unicamente alla/e persona/e cui e' indirizzata ed alle altre da questa autorizzata/e a riceverla. Se non siete i destinatari/autorizzati siete avvisati che qualsiasi azione, copia, comunicazione, divulgazione o simili basate sul contenuto di tali informazioni e' vietata e potrebbe essere contro la legge (art. 616 e seguenti C.P., regolamento UE 2016/679). Se avete ricevuto questa comunicazione per errore, vi preghiamo di darne immediata notizia al mittente a mezzo telefono, fax o e-mail e di distruggere il messaggio originale e ogni file allegato senza farne copia alcuna o riprodurne in alcun modo il contenuto. Grazie. Long Life Consulting.
+<br><br>
+This e-mail and its attachments are intended for the addressee(s) only and are confidential and/or may contain legally privileged information. If you have received this message by mistake or are not one of the addressees above, you may take no action based on it, and you may not copy or show it to anyone; please reply to this e-mail and point out the error which has occurred. Thank you. Long Life Consulting.
+</i>
+</div>
+
+</div>
+"""
+if "wa_template" not in st.session_state:
+    st.session_state.wa_template = """Gentile cliente {nome},
+
+con la presente le formuliamo la nostra migliore offerta sui prodotti utilizzati dalla Vostra azienda ''ipotizzando'' un presunto scarico per la giornata di seguito indicata.
+
+Data: {data}
+
+Gasolio per autotrazione = {prezzo}/litro + Iva
+
+Per via delle attuali fluttuazioni di mercato i prezzi in elenco avranno una validità giornaliera.
+
+Le consegne dei prodotti avverranno entro il giorno dopo alla data di effettuazione dell'ordine.
+
+ATTENZIONE!!! GLI ORDINI DOVRANNO PERVENIRE ENTRO LE ORE 14:00 RISPONDENDO ALLA PRESENTE OPPURE CHIAMANDO AL NUMERO DI TELEFONO
+Enrico Procaccini - 3892159094                
+
+Cordiali saluti
+Long Life Consulting
+Luigi Calcagni
+Corso Italia, 46 – 80011 Acerra (NA)
+Mob: 3209364267
+Info : info@longlifecons.com
+Wholeses Fuels - Fuel Cards - Coupons
+Agente di TAMOIL ITALIA S.P.A
+"""
 df = st.session_state.clienti
 
 # =========================
@@ -155,7 +350,6 @@ if st.session_state.page == "dashboard":
     st.session_state.prezzo_base = prezzo_base
 
     clienti_count = len(df)
-
     media_margine = round(df["Margine"].mean(), 3) if not df.empty else 0
 
     prezzo_medio = (
@@ -180,19 +374,39 @@ if st.session_state.page == "dashboard":
 
     st.divider()
 
-    # =========================
-    # 🚀 MASS EMAIL
-    # =========================
+    st.markdown("### ✉️ Messaggio Email")
+    st.info("""
+    ⚠️ ATTENZIONE
+    Modifica solo il contenuto del messaggio.
+    NON modificare:
+    - i tag HTML (es. <b>, <br>, <hr>)
+    - le variabili tra parentesi graffe (es. {prezzo}, {nome}, {data})
+    
+    ✔ Puoi cambiare le frasi liberamente
+    ❌ Non cancellare o modificare i simboli tecnici
+    """)
+        
+    template = st.text_area(
+        "Modifica il messaggio",
+        value=st.session_state.email_template,
+        height=300
+    )
+
+    st.session_state.email_template = template
+
+    st.divider()
+
     if st.button("📧 Invia email a tutti"):
 
         count = 0
 
         for _, c in df.iterrows():
+
             if c["Email"] and pd.notna(c["Email"]):
 
                 prezzo = calc_price(prezzo_base, c["Margine"], c["Trasporto"])
 
-                invia_email(c["Email"], prezzo)
+                invia_email(c["Email"], prezzo, template, c["Nome"])
 
                 st.session_state.clienti.loc[
                     st.session_state.clienti["ID"] == c["ID"],
@@ -204,9 +418,6 @@ if st.session_state.page == "dashboard":
         save_data(st.session_state.clienti)
         st.success(f"Email inviate: {count}")
 
-    # =========================
-    # 👤 LISTA CLIENTI
-    # =========================
     st.markdown("### 👤 Clienti")
 
     search_dash = st.text_input("🔍 Cerca", key="search_dashboard")
@@ -229,14 +440,26 @@ if st.session_state.page == "dashboard":
         col1, col2, col3 = st.columns(3)
 
         with col1:
-            tel = str(c["Telefono"]).replace("+", "").replace(" ", "")
-            msg = f"Prezzo oggi {format_euro(prezzo)} €/L"
-            wa = f"https://wa.me/{tel}?text={msg.replace(' ', '%20')}"
+            import urllib.parse
 
-            st.markdown(
-                f"<a href='{wa}' target='_blank' style='display:block;padding:8px;background:#22c55e;color:white;text-align:center;border-radius:10px;'>WhatsApp</a>",
-                unsafe_allow_html=True
-            )
+            tel = str(c["Telefono"]).replace("+", "").replace(" ", "")
+            data_scarico = prossimo_giorno_lavorativo()
+
+            giorni = ["Lunedì","Martedì","Mercoledì","Giovedì","Venerdì","Sabato","Domenica"]
+            giorno_nome = giorni[data_scarico.weekday()]
+
+            data = f"{giorno_nome} {data_scarico.strftime('%d/%m/%Y')}"
+
+            msg = st.session_state.wa_template \
+                .replace("{prezzo}", format_euro(prezzo)) \
+                .replace("{nome}", c["Nome"]) \
+                .replace("{data}", data)
+
+            msg_encoded = urllib.parse.quote(msg)
+
+            wa = f"https://wa.me/{tel}?text={msg_encoded}"
+
+            st.link_button("📲 WhatsApp", wa)
 
         with col2:
             if c["Email"] and pd.notna(c["Email"]):
@@ -244,7 +467,7 @@ if st.session_state.page == "dashboard":
 
                     prezzo_send = calc_price(prezzo_base, c["Margine"], c["Trasporto"])
 
-                    invia_email(c["Email"], prezzo_send)
+                    invia_email(c["Email"], prezzo_send, template, c["Nome"])
 
                     st.session_state.clienti.loc[
                         st.session_state.clienti["ID"] == c["ID"],
@@ -259,8 +482,6 @@ if st.session_state.page == "dashboard":
                 st.session_state.clienti = df[df["ID"] != c["ID"]]
                 save_data(st.session_state.clienti)
                 st.rerun()
-
-        st.divider()
 
 # =========================================================
 # 👤 CLIENTI PAGE
@@ -299,7 +520,7 @@ elif st.session_state.page == "clienti":
         st.divider()
 
 # =========================================================
-# ➕ CLIENTE
+# ➕ CLIENTE PAGE
 # =========================================================
 elif st.session_state.page == "cliente":
 
@@ -308,33 +529,35 @@ elif st.session_state.page == "cliente":
     editing = st.session_state.edit_id is not None
 
     if editing:
-        c = df[df["ID"] == st.session_state.edit_id]
-        if c.empty:
-            st.stop()
-        c = c.iloc[0]
+        c = df[df["ID"] == st.session_state.edit_id].iloc[0]
     else:
         c = {"Nome":"","PIVA":"","Telefono":"","Email":"","Margine":0.0,"Trasporto":0.0}
 
     nome = st.text_input("Nome", value=c["Nome"])
     piva = st.text_input("P.IVA", value=c["PIVA"])
     tel = st.text_input("Telefono", value=c["Telefono"])
-    email = st.text_input("Email", value=c["Email"])
+    email = st.text_input(
+    "Email",
+    value=c["Email"],
+    placeholder="es: principale@mail.com, cc@mail.com"
+    )
 
+    st.caption(
+    "ℹ️ Scrivi prima l'email principale. "
+    "Le successive separate da virgola saranno usate come CC (conoscenza)."
+    )
     margine = st.number_input("Margine", value=float(c["Margine"]), step=0.001, format="%.3f")
     trasporto = st.number_input("Trasporto", value=float(c["Trasporto"]), step=0.001, format="%.3f")
 
     if st.button("💾 Salva"):
 
-        margine = round(float(margine), 3)
-        trasporto = round(float(trasporto), 3)
-
         if editing:
             idx = st.session_state.clienti["ID"] == st.session_state.edit_id
 
-            st.session_state.clienti.loc[idx, "Nome"] = str(nome)
-            st.session_state.clienti.loc[idx, "PIVA"] = str(piva)
-            st.session_state.clienti.loc[idx, "Telefono"] = str(tel)
-            st.session_state.clienti.loc[idx, "Email"] = str(email)
+            st.session_state.clienti.loc[idx, "Nome"] = nome
+            st.session_state.clienti.loc[idx, "PIVA"] = piva
+            st.session_state.clienti.loc[idx, "Telefono"] = tel
+            st.session_state.clienti.loc[idx, "Email"] = email
             st.session_state.clienti.loc[idx, "Margine"] = margine
             st.session_state.clienti.loc[idx, "Trasporto"] = trasporto
 
